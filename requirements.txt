@@ -1,0 +1,135 @@
+"""
+face_recognition_module.py
+──────────────────────────
+Handles:
+  - Face detection using Haar Cascade
+  - Embedding extraction (64×64 equalised grayscale → flat float32 vector)
+  - Cosine-similarity matching against a stored face database
+  - Saving / loading face embeddings (pickle)
+
+Usage:
+    from modules.face_recognition_module import (
+        get_face_embedding, recognize_face,
+        load_faces, save_faces, face_cascade
+    )
+"""
+
+import os
+import pickle
+import cv2
+import numpy as np
+
+# ── Haar cascade ──────────────────────────────────────────────────────────────
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
+
+# ── Persistence ───────────────────────────────────────────────────────────────
+BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FACES_FILE = os.path.join(BASE_DIR, "data", "faces.pkl")
+
+
+def load_faces() -> dict:
+    """Load face-embedding database from disk.
+
+    Returns:
+        dict: { student_id (str): [embedding, ...] }
+    """
+    if os.path.exists(FACES_FILE):
+        with open(FACES_FILE, "rb") as f:
+            return pickle.load(f)
+    return {}
+
+
+def save_faces(db: dict) -> None:
+    """Persist the face-embedding database to disk.
+
+    Args:
+        db (dict): { student_id: [embedding, ...] }
+    """
+    os.makedirs(os.path.dirname(FACES_FILE), exist_ok=True)
+    with open(FACES_FILE, "wb") as f:
+        pickle.dump(db, f)
+
+
+# ── Core functions ────────────────────────────────────────────────────────────
+
+def get_face_embedding(frame: np.ndarray, face_rect: tuple):
+    """Extract a normalised face embedding from a BGR frame.
+
+    Steps:
+      1. Crop the detected face region (with 15 % padding).
+      2. Convert to grayscale.
+      3. Resize to 64 × 64.
+      4. Apply histogram equalisation (improves lighting robustness).
+      5. Flatten to a 1-D float32 vector.
+
+    Args:
+        frame:     BGR image (numpy array).
+        face_rect: (x, y, w, h) bounding box from detectMultiScale.
+
+    Returns:
+        np.ndarray of shape (4096,) or None if crop is empty.
+    """
+    x, y, w, h = face_rect
+    pad = int(min(w, h) * 0.15)
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(frame.shape[1], x + w + pad)
+    y2 = min(frame.shape[0], y + h + pad)
+
+    face_img = frame[y1:y2, x1:x2]
+    if face_img.size == 0:
+        return None
+
+    gray    = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+    resized = cv2.resize(gray, (64, 64))
+    eq      = cv2.equalizeHist(resized)
+    return eq.flatten().astype(np.float32)
+
+
+def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    """Return cosine similarity between two vectors (0 → 1).
+
+    Args:
+        a, b: 1-D float32 numpy arrays of equal length.
+
+    Returns:
+        float in [0, 1].  Returns 0 if either vector is zero.
+    """
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def recognize_face(
+    embedding: np.ndarray,
+    face_db:   dict,
+    threshold: float = 0.82
+) -> tuple:
+    """Match an embedding against every stored face.
+
+    Iterates over all stored embeddings for every student and picks the
+    one with the highest cosine similarity.
+
+    Args:
+        embedding: Query embedding (shape 4096,).
+        face_db:   { student_id: [embedding, ...] }
+        threshold: Minimum similarity to count as a match (default 0.82).
+
+    Returns:
+        (student_id, score) if best score ≥ threshold, else (None, score).
+    """
+    best_sid, best_score = None, 0.0
+
+    for sid, emb_list in face_db.items():
+        for emb in emb_list:
+            score = cosine_sim(embedding, emb)
+            if score > best_score:
+                best_score = score
+                best_sid   = sid
+
+    if best_score >= threshold:
+        return best_sid, best_score
+    return None, best_score
