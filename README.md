@@ -1,16 +1,3 @@
-"""
-main.py  ──  AttendanceIQ
-─────────────────────────
-Entry point.  Builds the Tkinter UI and wires it to the three modules:
-
-    modules/face_recognition_module.py  →  face detection & matching
-    modules/gesture_module.py           →  hand-gesture classification
-    modules/attendance_module.py        →  student data & records
-
-Run:
-    python main.py
-"""
-
 import os
 import threading
 import tkinter as tk
